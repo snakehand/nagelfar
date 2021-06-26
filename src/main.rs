@@ -7,36 +7,55 @@ use account_transactions::{AccountTransaction, TransactionId, TransactionStore, 
 use amount::Amount;
 
 fn main() {
-    let a1: Account = Default::default();
-    let s: f64 = a1
-        .total()
-        .unwrap()
-        .checked_sub(Amount::new(123.023999).unwrap())
-        .unwrap()
-        .into();
-    println!("{}", s);
-
     let mut account_store = AccountStore::new();
     let mut transactions = TransactionStore::new();
 
-    let client = AccountId::new(42);
-    let tx_id = TransactionId::new(1103);
-    let ttype = TransactionType::Deposit;
-    let amount = Amount::new(2000.4999).unwrap();
-    let mut trans = AccountTransaction {
-        client,
-        tx_id,
-        ttype,
-        amount,
-    };
-    let res = transactions.process_transaction(trans, &account_store);
+    fn trans(cid: u16, tid: u32, ttype: TransactionType, amount: f64) -> AccountTransaction {
+        let client = AccountId::new(cid);
+        let tx_id = TransactionId::new(tid);
+        let amount = Amount::new(amount).unwrap();
+        AccountTransaction {
+            client,
+            tx_id,
+            ttype,
+            amount,
+        }
+    }
+
+    let res = transactions.process_transaction(
+        trans(42, 1103, TransactionType::Deposit, 2000.4999),
+        &account_store,
+    );
     println!("{:?}", res);
-    let res = transactions.process_transaction(trans, &account_store);
+
+    let res = transactions.process_transaction(
+        trans(42, 1104, TransactionType::Withdrawal, 3000.4999),
+        &account_store,
+    );
     println!("{:?}", res);
-    trans.ttype = TransactionType::Withdrawal;
-    trans.amount = Amount::new(3000.4999).unwrap();
-    trans.tx_id = TransactionId::new(1104);
-    let res = transactions.process_transaction(trans, &account_store);
+
+    let res = transactions.process_transaction(
+        trans(42, 1103, TransactionType::Disputed, 3000.4999),
+        &account_store,
+    );
+    println!("{:?}", res);
+
+    let res = transactions.process_transaction(
+        trans(42, 1105, TransactionType::Deposit, 355.8674),
+        &account_store,
+    );
+    println!("{:?}", res);
+
+    let res = transactions.process_transaction(
+        trans(42, 1103, TransactionType::Chargeback, 3000.4999),
+        &account_store,
+    );
+    println!("{:?}", res);
+
+    let res = transactions.process_transaction(
+        trans(42, 1106, TransactionType::Deposit, 355.8674),
+        &account_store,
+    );
     println!("{:?}", res);
 
     println!("{:?}", account_store);

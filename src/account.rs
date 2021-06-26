@@ -16,7 +16,7 @@ impl AccountId {
 pub struct Account {
     pub available: Amount,
     pub held: Amount,
-    pub locked: bool,
+    pub frozen: bool,
 }
 
 enum AccountActionResult {
@@ -43,7 +43,7 @@ pub struct AccountStore {
 #[derive(Debug, Copy, Clone)]
 pub enum AccountModifyError {
     NotFound,          // Acount could not be found, or creation failed
-    Locked,            // Account is locked and can not be modified
+    Frozen,            // Account is locked and can not be modified
     TransactionFailed, // Atomic operation failed
 }
 
@@ -63,8 +63,8 @@ impl AccountStore {
             Vacant(entry) => entry.insert(Default::default()),
             Occupied(entry) => entry.into_mut(),
         };
-        if account.locked {
-            return Err(AccountModifyError::Locked);
+        if account.frozen {
+            return Err(AccountModifyError::Frozen);
         }
         let res = proc(account);
         Ok(res)

@@ -12,7 +12,7 @@ impl TransactionId {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum TransactionType {
     Deposit,
     Withdrawal,
@@ -30,7 +30,7 @@ pub struct AccountTransaction {
     pub amount: Amount,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum TransactionState {
     Deposit,
     Withdrawal,
@@ -56,6 +56,9 @@ pub enum ProcessError {
     OverflowError,
     InsufficientFunds,
     UnderflowError,
+    ClientMismatch,
+    AlreadyDisputed,
+    DisputeNotOpen,
     Ok,
 }
 
@@ -111,6 +114,68 @@ impl Transaction {
             Err(err) => Err(ProcessError::AccountError(err)),
         }
     }
+
+    fn dispute(&self, account_store: &AccountStore) -> Result<(), ProcessError> {
+        let result = account_store.modify(self.client, &|account: &mut Account| {
+            let available = match account.available.checked_sub(self.amount) {
+                None => return ProcessError::UnderflowError,
+                Some(v) => v,
+            };
+            let held = match account.held.checked_add(self.amount) {
+                None => return ProcessError::OverflowError,
+                Some(v) => v,
+            };
+            account.available = available;
+            account.held = held;
+            ProcessError::Ok
+        });
+
+        match result {
+            Ok(ProcessError::Ok) => Ok(()),
+            Ok(err) => Err(err),
+            Err(err) => Err(ProcessError::AccountError(err)),
+        }
+    }
+
+    fn resolve(&self, account_store: &AccountStore) -> Result<(), ProcessError> {
+        let result = account_store.modify(self.client, &|account: &mut Account| {
+            let available = match account.available.checked_add(self.amount) {
+                None => return ProcessError::OverflowError,
+                Some(v) => v,
+            };
+            let held = match account.held.checked_sub(self.amount) {
+                None => return ProcessError::UnderflowError,
+                Some(v) => v,
+            };
+            // Only modify account at an infallible stage
+            account.available = available;
+            account.held = held;
+            ProcessError::Ok
+        });
+
+        match result {
+            Ok(ProcessError::Ok) => Ok(()),
+            Ok(err) => Err(err),
+            Err(err) => Err(ProcessError::AccountError(err)),
+        }
+    }
+
+    fn chargeback(&self, account_store: &AccountStore) -> Result<(), ProcessError> {
+        let result = account_store.modify(self.client, &|account: &mut Account| {
+            account.held = match account.held.checked_sub(self.amount) {
+                None => return ProcessError::UnderflowError,
+                Some(v) => v,
+            };
+            account.frozen = true;
+            ProcessError::Ok
+        });
+
+        match result {
+            Ok(ProcessError::Ok) => Ok(()),
+            Ok(err) => Err(err),
+            Err(err) => Err(ProcessError::AccountError(err)),
+        }
+    }
 }
 
 // Sharded transaction storage - for simplicity this code operates with just a single shard
@@ -141,11 +206,45 @@ impl TransactionStore {
                 entry.insert(transaction);
                 Ok(())
             }
-            (Vacant(entry), _) => Err(ProcessError::TransactionNotFound),
-            (Occupied(entry), TransactionType::Deposit) => Err(ProcessError::TransactionExist),
-            (Occupied(entry), TransactionType::Withdrawal) => Err(ProcessError::TransactionExist),
-            (Occupied(entry), _) => {
-                let t = entry.into_mut();
+            (Vacant(_entry), _) => Err(ProcessError::TransactionNotFound),
+            (Occupied(_entry), TransactionType::Deposit) => Err(ProcessError::TransactionExist),
+            (Occupied(_entry), TransactionType::Withdrawal) => Err(ProcessError::TransactionExist),
+            (Occupied(entry), TransactionType::Disputed) => {
+                let trans = entry.into_mut();
+                if trans.client != transaction.client {
+                    return Err(ProcessError::ClientMismatch);
+                }
+                match trans.state {
+                    TransactionState::Deposit => (),
+                    TransactionState::Withdrawal => (),
+                    _ => return Err(ProcessError::AlreadyDisputed),
+                }
+                trans.dispute(account_store)?;
+                trans.state = TransactionState::Disputed;
+                Ok(())
+            }
+            (Occupied(entry), TransactionType::Resolved) => {
+                let trans = entry.into_mut();
+                if trans.client != transaction.client {
+                    return Err(ProcessError::ClientMismatch);
+                }
+                if trans.state != TransactionState::Disputed {
+                    return Err(ProcessError::DisputeNotOpen);
+                }
+                trans.resolve(account_store)?;
+                trans.state = TransactionState::Resolved;
+                Ok(())
+            }
+            (Occupied(entry), TransactionType::Chargeback) => {
+                let trans = entry.into_mut();
+                if trans.client != transaction.client {
+                    return Err(ProcessError::ClientMismatch);
+                }
+                if trans.state != TransactionState::Disputed {
+                    return Err(ProcessError::DisputeNotOpen);
+                }
+                trans.chargeback(account_store)?;
+                trans.state = TransactionState::Chargeback;
                 Ok(())
             }
         };
