@@ -1,5 +1,4 @@
 use core::cmp::Ordering;
-use std::convert::Into;
 
 #[derive(Debug, Copy, Clone)]
 pub struct Amount(i64);
@@ -59,8 +58,8 @@ impl std::cmp::Ord for Amount {
     }
 }
 
-impl Into<f64> for Amount {
-    fn into(self) -> f64 {
-        self.0 as f64 / 10000.0
+impl From<Amount> for f64 {
+    fn from(src: Amount) -> f64 {
+        src.0 as f64 / 10000.0
     }
 }

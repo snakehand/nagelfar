@@ -37,15 +37,14 @@ pub enum TransactionState {
     Disputed,
     Resolved,
     Chargeback,
-    FailedDeposit,
-    FailedWithdrawal,
 }
 
 #[derive(Debug)]
 pub struct Transaction {
-    client: AccountId,
-    state: TransactionState,
-    amount: Amount,
+    client: AccountId,       // Client identifier
+    ttype: TransactionState, // Original transaction state
+    state: TransactionState, // Current transaction state
+    amount: Amount,          // Original amount
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -59,6 +58,7 @@ pub enum ProcessError {
     ClientMismatch,
     AlreadyDisputed,
     DisputeNotOpen,
+    WithdrawalNotDisputable,
     Ok,
 }
 
@@ -72,9 +72,11 @@ impl Transaction {
             TransactionType::Resolved => TransactionState::Resolved,
             TransactionType::Chargeback => TransactionState::Chargeback,
         };
+        let ttype = state;
         let amount = ac_trans.amount;
         Transaction {
             client,
+            ttype,
             state,
             amount,
         }
@@ -116,7 +118,7 @@ impl Transaction {
     }
 
     fn dispute(&self, account_store: &AccountStore) -> Result<(), ProcessError> {
-        let result = account_store.modify(self.client, &|account: &mut Account| {
+        let result = account_store.modify_force(self.client, &|account: &mut Account| {
             let available = match account.available.checked_sub(self.amount) {
                 None => return ProcessError::UnderflowError,
                 Some(v) => v,
@@ -138,7 +140,7 @@ impl Transaction {
     }
 
     fn resolve(&self, account_store: &AccountStore) -> Result<(), ProcessError> {
-        let result = account_store.modify(self.client, &|account: &mut Account| {
+        let result = account_store.modify_force(self.client, &|account: &mut Account| {
             let available = match account.available.checked_add(self.amount) {
                 None => return ProcessError::OverflowError,
                 Some(v) => v,
@@ -161,7 +163,7 @@ impl Transaction {
     }
 
     fn chargeback(&self, account_store: &AccountStore) -> Result<(), ProcessError> {
-        let result = account_store.modify(self.client, &|account: &mut Account| {
+        let result = account_store.modify_force(self.client, &|account: &mut Account| {
             account.held = match account.held.checked_sub(self.amount) {
                 None => return ProcessError::UnderflowError,
                 Some(v) => v,
@@ -216,7 +218,9 @@ impl TransactionStore {
                 }
                 match trans.state {
                     TransactionState::Deposit => (),
-                    TransactionState::Withdrawal => (),
+                    TransactionState::Withdrawal => {
+                        return Err(ProcessError::WithdrawalNotDisputable)
+                    }
                     _ => return Err(ProcessError::AlreadyDisputed),
                 }
                 trans.dispute(account_store)?;
@@ -232,7 +236,7 @@ impl TransactionStore {
                     return Err(ProcessError::DisputeNotOpen);
                 }
                 trans.resolve(account_store)?;
-                trans.state = TransactionState::Resolved;
+                trans.state = trans.ttype; // Revert to oriignal state so that transaction can be re-disputed
                 Ok(())
             }
             (Occupied(entry), TransactionType::Chargeback) => {

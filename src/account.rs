@@ -19,19 +19,10 @@ pub struct Account {
     pub frozen: bool,
 }
 
-enum AccountActionResult {
-    Ok,
-    ForzenAccount,
-}
-
 impl Account {
     // Make accessor to preserve invariant
     pub fn total(&self) -> Option<Amount> {
         self.available.checked_add(self.held)
-    }
-
-    pub fn chargeback(&mut self) -> AccountActionResult {
-        AccountActionResult::Ok
     }
 }
 
@@ -42,9 +33,9 @@ pub struct AccountStore {
 
 #[derive(Debug, Copy, Clone)]
 pub enum AccountModifyError {
-    NotFound,          // Acount could not be found, or creation failed
-    Frozen,            // Account is locked and can not be modified
-    TransactionFailed, // Atomic operation failed
+    // NotFound,          // Acount could not be found, or creation failed
+    Frozen, // Account is locked and can not be modified
+            // TransactionFailed, // Atomic operation failed
 }
 
 impl AccountStore {
@@ -68,5 +59,34 @@ impl AccountStore {
         }
         let res = proc(account);
         Ok(res)
+    }
+
+    pub fn modify_force<T>(
+        &self,
+        id: AccountId,
+        proc: &impl Fn(&mut Account) -> T,
+    ) -> Result<T, AccountModifyError> {
+        let mut store = self.store.lock().unwrap();
+        let account = match store.entry(id) {
+            Vacant(entry) => entry.insert(Default::default()),
+            Occupied(entry) => entry.into_mut(),
+        };
+        let res = proc(account);
+        Ok(res)
+    }
+
+    pub fn print(&self) {
+        println!("client, available, held, total, locked");
+        let store = self.store.lock().unwrap();
+        for (cid, account) in store.iter() {
+            println!(
+                "{}, {:.4}, {:.4}, {:.4}, {}",
+                cid.0,
+                f64::from(account.available),
+                f64::from(account.held),
+                f64::from(account.total().unwrap()),
+                account.frozen
+            );
+        }
     }
 }
